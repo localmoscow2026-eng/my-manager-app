@@ -60,7 +60,7 @@ main{padding-inline-start:260px;padding-bottom:40px}.mini~main{padding-inline-st
 .fab{position:fixed;inset-inline-end:20px;bottom:calc(var(--tabH) + env(safe-area-inset-bottom) + 16px);width:58px;height:58px;border-radius:50%;background:var(--navy);color:#fff;border:0;box-shadow:0 10px 24px rgba(36,63,104,.35);display:grid;place-items:center;z-index:21;cursor:pointer}
 [data-theme=dark] .fab{background:var(--orange);color:#243F68}
 label.f{display:block;margin-bottom:12px}label.f>span{display:block;font-size:13px;font-weight:700;color:var(--sub);margin-bottom:4px}
-input[type=text],input[type=search],input[type=number],input[type=time],select,textarea{width:100%;min-height:44px;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);font-size:16px}
+input[type=text],input[type=email],input[type=password],input[type=search],input[type=number],input[type=time],select,textarea{width:100%;min-height:44px;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);font-size:16px}
 textarea{min-height:70px;resize:vertical}
 .jdate{display:flex;gap:6px}.jdate select{flex:1;padding:8px 4px}
 .days{display:flex;gap:4px;flex-wrap:wrap}.days label{flex:1;min-width:40px}.days input{display:none}.days span{display:grid;place-items:center;min-height:44px;border-radius:12px;background:var(--chip);font-weight:700;font-size:13px;cursor:pointer}.days input:checked+span{background:var(--navy);color:#fff}
@@ -92,3 +92,6 @@ textarea{min-height:70px;resize:vertical}
 .hidden{display:none!important}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 .prog{display:grid;grid-template-columns:1fr 1fr;gap:12px}.prog .ring{width:64px;height:64px}.prog .ring::after{width:50px;height:50px;font-size:14px}@media(max-width:360px){.prog{grid-template-columns:1fr}}
+
+/* cloud sync */
+.banner.cloud{border:1px solid var(--green);flex-wrap:wrap}.syncline{margin-top:4px}.syncline:empty{display:none}
