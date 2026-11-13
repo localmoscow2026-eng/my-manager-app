@@ -1,8 +1,8 @@
 /* IndexedDB layer. DB structure version (IDB_VERSION) and data schema version (SCHEMA_VERSION)
    are separate. Upgrades only ADD stores; existing data is never cleared. */
 (function (root) {
-  const DB_NAME = 'my-manager-db', IDB_VERSION = 2, SCHEMA_VERSION = 1;
-  const STORES = ['workspaces', 'goals', 'projects', 'tasks', 'recurring_tasks', 'task_occurrences', 'task_completion_history'];
+  const DB_NAME = 'my-manager-db', IDB_VERSION = 3, SCHEMA_VERSION = 1;
+  const STORES = ['workspaces', 'goals', 'projects', 'tasks', 'recurring_tasks', 'task_occurrences', 'task_completion_history', 'media'];   /* media (v3): user photos for photo tags, synced like any record */
   const ALL = [...STORES, 'meta', 'snapshots', 'outbox']; /* outbox (v2): pending cloud-sync writes, keyPath 'key' = store|id */
   let db;
   function open() {

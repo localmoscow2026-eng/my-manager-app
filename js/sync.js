@@ -5,7 +5,7 @@
 (function (root) {
   const SB_URL = 'https://pxajazsrhliofbzkdquv.supabase.co', SB_KEY = 'sb_publishable_0jO5qskl6pRhghnu3qMQfg_rVtrnqyH';
   const STORES = DB.STORES.concat(['settings']);   // 'settings' = meta record key 'settings'
-  const EPOCH = 0, OVERLAP = 10 * 60000, PAGE = 1000;
+  const EPOCH = 0, OVERLAP = 10 * 60000, PAGE = 250, MAX_BODY = 900 * 1024, MAX_ROWS = 200;   // photos (media) are ~100KB rows → size-bounded upload chunks
   const st = { user: null, status: 'off', lastSync: null, error: null, pending: 0, ready: false, available: !!root.supabase };
   let sb = null, hooks = {}, running = null, again = false, kickT = null, firstDone = false;
   const tsOf = v => { const n = Date.parse(v || ''); return isNaN(n) ? EPOCH : n; };
@@ -84,10 +84,15 @@
     if (ops.length) await DB.batch(ops);
     return { changed, maxTs, pristine };
   }
+  /* split the outbox into upload chunks of ≤ MAX_ROWS rows and ≈ ≤ MAX_BODY bytes (a single big row still goes alone) */
+  function chunks(all) {
+    const out = []; let cur = [], size = 0;
+    for (const e of all) { const n = JSON.stringify(e.data || {}).length + 200; if (cur.length && (cur.length >= MAX_ROWS || size + n > MAX_BODY)) { out.push(cur); cur = []; size = 0; } cur.push(e); size += n; }
+    if (cur.length) out.push(cur); return out;
+  }
   async function push() {
     const all = await DB.getAll('outbox'); if (!all.length) return 0;
-    for (let i = 0; i < all.length; i += 200) {
-      const chunk = all.slice(i, i + 200);
+    for (const chunk of chunks(all)) {
       const { error } = await sb.from('records').upsert(chunk.map(e => ({ user_id: st.user.id, store: e.store, id: e.id, data: e.data || {}, updated_at: e.updatedAt, deleted: !!e.deleted })), { onConflict: 'user_id,store,id' });
       if (error) throw error;
       const ops = []; for (const e of chunk) { const cur = await DB.get('outbox', e.key); if (cur && cur.updatedAt === e.updatedAt && same(cur.data, e.data)) ops.push({ store: 'outbox', del: e.key }); }
@@ -163,5 +168,5 @@
     st.user = null; await DB.batch([{ store: 'meta', del: 'sync' }]); st.lastSync = null;
     hooks.onAuth && hooks.onAuth(st); setStatus('off');
   }
-  root.Sync = { init, sync, kick, outboxOps, replaceOps, signUp, signIn, signOut, state: st, get client() { return client(); } };
+  root.Sync = { _chunks: chunks, init, sync, kick, outboxOps, replaceOps, signUp, signIn, signOut, state: st, get client() { return client(); } };
 })(this);

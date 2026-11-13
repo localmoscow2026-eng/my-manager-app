@@ -32,6 +32,7 @@ const P = {
   cal: '<rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 1v3M12 20v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M1 12h3M20 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
   trash: '<path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
@@ -45,13 +46,27 @@ const WS_ICONS = ['shop', 'brief', 'home', 'user', 'family', 'heart', 'money', '
 const ic = (n, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${P[n] || P.folder}</svg>`;
 
 /* ---------------- state layer ---------------- */
-const S = { workspaces: [], goals: [], projects: [], tasks: [], recurring_tasks: [], task_occurrences: [], task_completion_history: [] };
+const S = { workspaces: [], goals: [], projects: [], tasks: [], recurring_tasks: [], task_occurrences: [], task_completion_history: [], media: [] };
 let settings = { key: 'settings', userName: 'امین', theme: 'auto', sidebarMini: false, privacy: false };
 let meta = { lastBackup: null, lastChange: null, persisted: null, snapshotAt: null };
-const ui = { q: '', fws: '', fstatus: 'open', fpri: '', scope: 'all', sort: 'due', calMode: 'month', calDate: null };
+const ui = { ftag: '', ftagWs: '', ttag: '', q: '', fws: '', fstatus: 'open', fpri: '', scope: 'all', sort: 'due', calMode: 'month', calDate: null };
 let TODAY = J.todayIso();
 const by = (store, id) => S[store].find(x => x.id === id);
 const occId = (rid, date) => rid + '@' + date;
+/* ---------------- photo tags ---------------- */
+const TAG_GROUPS = { w_sarafi: 'صرافی', w_irandood: 'ایران دود', w_janebi: 'جانبی بازار', w_chapar: 'چاپار کارگو', w_personal: 'امور شخصی', w_family: 'خانواده' };
+function tagOf(id) { if (!id) return null; const b = TAGS.BY[id]; if (b) return b; const m = by('media', id); return m ? { id, label: m.label || 'عکس من', src: m.dataUrl, ws: m.workspaceId, custom: true } : null; }
+const photoOf = it => { const t = it && (it.task || it.rec || it); return t && t.photo ? tagOf(t.photo) : null; };
+const photoIdOf = it => { const t = it && (it.task || it.rec || it); return (t && t.photo) || ''; };
+function tagsForWs(wsId) {
+  const out = [], seen = new Set(), add = t => { if (t && !seen.has(t.id)) { seen.add(t.id); out.push(t); } };
+  S.media.filter(m => m.workspaceId === wsId).forEach(m => add(tagOf(m.id)));
+  TAGS.LIST.filter(t => t.ws === wsId).forEach(add);
+  [...S.tasks, ...S.recurring_tasks].filter(t => t.workspaceId === wsId && t.photo).forEach(t => add(tagOf(t.photo)));
+  return out;
+}
+const tagImg = (t, cls = '') => t ? `<img class="${cls}" src="${esc(t.src)}" alt="${esc(t.label)}" loading="lazy" decoding="async">` : '';
+const tagChip = (t, on, act, n) => `<button class="tagc ${on ? 'on' : ''}" data-act="${act}" data-tag="${esc(t.id)}" aria-pressed="${on}" aria-label="فیلتر: ${esc(t.label)}"><span class="tring">${tagImg(t)}${n ? `<i class="n">${fa(n)}</i>` : ''}</span><span class="lb">${esc(t.label)}</span></button>`;
 
 /* ops: [{store, put}|{store, del}] → one IndexedDB transaction, then memory, then render */
 async function commit(ops, opts = {}) {
@@ -242,6 +257,11 @@ function taskForm(opts = {}) {
   <label class="f"><span>توضیحات</span><textarea name="description">${esc(t.description)}</textarea></label>
   <div class="grid g2"><label class="f"><span>فضای کاری</span><select name="workspaceId">${wsOptions(wsId)}</select></label>
   <label class="f"><span>پروژه</span><select name="projectId">${projOptions(wsId, t.projectId)}</select></label></div>
+  <div class="f pp" data-ppwrap><span>عکس کار <small class="sub">— با عکس، کار را راحت‌تر پیدا می‌کنید</small></span><input type="hidden" name="photo" value="${esc(t.photo || opts.photo || '')}">
+   <div class="seg pptabs" role="tablist"><button type="button" data-pptab="ws">عکس‌های این فضا</button><button type="button" data-pptab="all">همه عکس‌ها</button></div>
+   <div class="ppgrid" data-ppgrid></div>
+   <div class="row wrap" style="margin-top:8px"><label class="btn sm">${ic('image')} عکس از گالری<input type="file" accept="image/*" hidden data-ppfile></label><span class="sub" data-ppmsg aria-live="polite"></span></div>
+   <label class="f hidden" data-pplabel style="margin-top:8px"><span>نام این عکس (برای جست‌وجو و فیلتر)</span><input type="text" name="photoLabel" maxlength="40" placeholder="مثلاً: بیمه موتور"></label></div>
   <label class="f ${catOptions(wsId) ? '' : 'hidden'}" data-catwrap><span>دسته</span><select name="category">${catOptions(wsId, t.category)}</select></label>
   <div class="grid g2"><label class="f"><span>اولویت</span><select name="priority">${Object.entries(PRI).map(([k, v]) => `<option value="${k}" ${(t.priority || 'medium') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
   <label class="f"><span>ساعت یادآوری</span><input type="time" name="reminderTime" value="${esc(t.reminderTime || '')}"></label></div>
@@ -259,9 +279,48 @@ function taskForm(opts = {}) {
   <div class="f"><span class="sub">زیرکارها</span><div class="subs" data-subs>${(t.subtasks || []).map(subRow).join('')}</div><button type="button" class="btn sm" data-addsub>${ic('plus')} افزودن زیرکار</button></div>
   <p class="c-red hidden" data-err role="alert"></p>
   <div class="ft"><button class="btn pri" type="submit">${ic('check')} ذخیره</button><button type="button" class="btn" data-close>انصراف</button></div></form>`);
-  const f = m.querySelector('form'), sync = () => { const v = f.recType.value; f.querySelector('[data-once]').classList.toggle('hidden', v !== 'none'); f.querySelector('[data-rec]').classList.toggle('hidden', v === 'none'); f.querySelector('[data-days]').classList.toggle('hidden', !['custom', 'weekdays5'].includes(v)); f.querySelector('[data-interval]').classList.toggle('hidden', v !== 'everyN'); };
+  const f = m.querySelector('form');
+  /* ---- photo picker ---- */
+  let pending = null, tab = 'ws';
+  const curWs = () => f.workspaceId.value, selId = () => f.photo.value;
+  const tile = x => `<button type="button" class="ppt ${selId() === x.id ? 'on' : ''}" data-pp="${esc(x.id)}" aria-pressed="${selId() === x.id}">${tagImg(x)}<span>${esc(x.label)}</span></button>`;
+  const pendTag = () => pending && { id: pending.id, label: (pending.label || '').trim() || 'عکس من', src: pending.dataUrl, custom: true };
+  function drawPP() {
+    const none = `<button type="button" class="ppt none ${selId() ? '' : 'on'}" data-pp="" aria-pressed="${!selId()}">${ic('x')}<span>بدون عکس</span></button>`;
+    let html = none + (pending ? tile(pendTag()) : '');
+    if (tab === 'ws') { const l = tagsForWs(curWs()); html += l.map(tile).join(''); if (!l.length) html += '<p class="sub ppempty">برای این فضا عکس آماده‌ای نیست؛ از «همه عکس‌ها» انتخاب کنید یا عکس خودتان را بگذارید.</p>'; }
+    else {
+      const mine = S.media.map(x => tagOf(x.id)); if (mine.length) html += `<h4>عکس‌های من</h4>` + mine.map(tile).join('');
+      for (const g of Object.keys(TAG_GROUPS)) html += `<h4>${esc((by('workspaces', g) || {}).name || TAG_GROUPS[g])}</h4>` + TAGS.LIST.filter(x => x.ws === g).map(tile).join('');
+    }
+    f.querySelector('[data-ppgrid]').innerHTML = html;
+    $$('[data-pptab]', f).forEach(b => { b.classList.toggle('on', b.dataset.pptab === tab); b.setAttribute('aria-selected', b.dataset.pptab === tab); });
+    const sel = tagOf(selId()) || (pending && selId() === pending.id ? pendTag() : null), lab = f.querySelector('[data-pplabel]');
+    lab.classList.toggle('hidden', !(sel && sel.custom));
+  }
+  if (selId() && !tagsForWs(wsId).some(x => x.id === selId())) tab = 'all';
+  if (tagOf(selId()) && tagOf(selId()).custom) f.photoLabel.value = tagOf(selId()).label;
+  f.querySelector('[data-ppwrap]').addEventListener('click', e => {
+    const tb = e.target.closest('[data-pptab]'); if (tb) { tab = tb.dataset.pptab; drawPP(); return; }
+    const b = e.target.closest('[data-pp]'); if (!b) return;
+    f.photo.value = b.dataset.pp; const tg = tagOf(b.dataset.pp); if (tg && tg.custom) f.photoLabel.value = tg.label; else if (pending && b.dataset.pp === pending.id) f.photoLabel.value = pending.label || '';
+    drawPP();
+  });
+  f.photoLabel.addEventListener('input', () => { if (pending && selId() === pending.id) pending.label = f.photoLabel.value; const o = f.querySelector(`.ppt[data-pp="${selId()}"] span`); if (o) o.textContent = f.photoLabel.value.trim() || 'عکس من'; });
+  f.querySelector('[data-ppfile]').onchange = async e => {
+    const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+    const msg = f.querySelector('[data-ppmsg]'); msg.textContent = 'در حال آماده‌سازی عکس…';
+    try {
+      const r = await TAGS.compress(file, { max: 600, target: 80 * 1024 });
+      if (r.bytes > 100 * 1024) throw new Error('عکس بعد از فشرده‌سازی هم بزرگ است؛ عکس دیگری انتخاب کنید');
+      pending = { id: uid('m'), ...r, label: f.title.value.trim().slice(0, 40) }; f.photo.value = pending.id; f.photoLabel.value = pending.label;
+      msg.textContent = `✓ عکس آماده شد (${fa(r.width)}×${fa(r.height)}، ${fa(Math.round(r.bytes / 1024))} کیلوبایت)`; drawPP();
+    } catch (x) { msg.textContent = '⚠️ ' + (x.message || x); }
+  };
+  drawPP();
+  const sync = () => { const v = f.recType.value; f.querySelector('[data-once]').classList.toggle('hidden', v !== 'none'); f.querySelector('[data-rec]').classList.toggle('hidden', v === 'none'); f.querySelector('[data-days]').classList.toggle('hidden', !['custom', 'weekdays5'].includes(v)); f.querySelector('[data-interval]').classList.toggle('hidden', v !== 'everyN'); };
   f.recType.onchange = () => { if (f.recType.value === 'weekdays5') $$('[name=day]', f).forEach(c => c.checked = +c.value <= 4); sync(); }; sync();
-  f.workspaceId.onchange = () => { f.projectId.innerHTML = projOptions(f.workspaceId.value); const c = catOptions(f.workspaceId.value); f.category.innerHTML = c; f.querySelector('[data-catwrap]').classList.toggle('hidden', !c); };
+  f.workspaceId.onchange = () => { if (tab === 'ws') drawPP(); f.projectId.innerHTML = projOptions(f.workspaceId.value); const c = catOptions(f.workspaceId.value); f.category.innerHTML = c; f.querySelector('[data-catwrap]').classList.toggle('hidden', !c); };
   f.querySelector('[data-addsub]').onclick = () => { f.querySelector('[data-subs]').insertAdjacentHTML('beforeend', subRow({ id: uid('s'), title: '', done: false })); f.querySelector('[data-subs] label:last-child input[type=text]').focus(); };
   f.onsubmit = async e => {
     e.preventDefault(); f.querySelector('[data-err]').classList.add('hidden');
@@ -269,16 +328,19 @@ function taskForm(opts = {}) {
       const title = f.title.value.trim(); if (!title) throw new Error('عنوان را وارد کنید');
       const subtasks = $$('[data-sub]', f).map(l => ({ id: l.dataset.sub, title: l.querySelector('input[type=text]').value.trim(), done: l.querySelector('input[type=checkbox]').checked })).filter(s => s.title);
       const at = nowTs(), type = f.recType.value;
-      const common = { title, description: f.description.value.trim(), workspaceId: f.workspaceId.value, projectId: f.projectId.value || null, category: f.category.value || null, priority: f.priority.value, reminderTime: f.reminderTime.value || null, subtasks, userId: t.userId || OWNER, assigneeId: t.assigneeId || null, updatedAt: at };
+      const photo = f.photo.value || null, extra = [];
+      if (pending && photo === pending.id) extra.push({ store: 'media', put: { id: pending.id, userId: t.userId || OWNER, workspaceId: f.workspaceId.value, label: (pending.label || '').trim() || 'عکس من', dataUrl: pending.dataUrl, width: pending.width, height: pending.height, bytes: pending.bytes, type: pending.type, createdAt: at, updatedAt: at } });
+      else { const md = photo && by('media', photo), lb = f.photoLabel.value.trim(); if (md && lb && lb !== md.label) extra.push({ store: 'media', put: { ...md, label: lb } }); }
+      const common = { photo, title, description: f.description.value.trim(), workspaceId: f.workspaceId.value, projectId: f.projectId.value || null, category: f.category.value || null, priority: f.priority.value, reminderTime: f.reminderTime.value || null, subtasks, userId: t.userId || OWNER, assigneeId: t.assigneeId || null, updatedAt: at };
       if (type === 'none') {
         const startDate = readJ(f, 'startDate'), dueDate = readJ(f, 'dueDate'); if (startDate && dueDate && dueDate < startDate) throw new Error('سررسید نباید قبل از تاریخ شروع باشد');
         const status = f.status.value;
-        await commit([{ store: 'tasks', put: { ...t, ...common, id: t.id || uid('t'), startDate, dueDate, status, completedAt: status === 'done' ? (t.completedAt || at) : null, createdAt: t.createdAt || at } }]);
+        await commit([...extra, { store: 'tasks', put: { ...t, ...common, id: t.id || uid('t'), startDate, dueDate, status, completedAt: status === 'done' ? (t.completedAt || at) : null, createdAt: t.createdAt || at } }]);
       } else {
         const r = { type, days: $$('[name=day]:checked', f).map(c => +c.value), interval: +J.toEn(f.interval.value.trim()), startDate: readJ(f, 'recStart'), endDate: readJ(f, 'recEnd') };
         if (type !== 'everyN') r.interval = 1; if (!['custom', 'weekdays5'].includes(type)) r.days = [];
         const v = R.validate(r); if (v) throw new Error(v);
-        const ops = [{ store: 'recurring_tasks', put: { ...t, ...common, id: t.id || uid('r'), rule: r, createdAt: t.createdAt || at } }];
+        const ops = [...extra, { store: 'recurring_tasks', put: { ...t, ...common, id: t.id || uid('r'), rule: r, createdAt: t.createdAt || at } }];
         if (t.id && t.workspaceId !== common.workspaceId) S.task_occurrences.filter(o => o.recurringId === t.id).forEach(o => ops.push({ store: 'task_occurrences', put: { ...o, workspaceId: common.workspaceId } }));
         await commit(ops);
       }
@@ -292,7 +354,9 @@ document.addEventListener('click', e => { const b = e.target.closest('[data-dels
 function detailsModal(it) {
   const t = it.task || it.rec, ws = by('workspaces', it.wsId), pr = it.projectId && by('projects', it.projectId), st = itemState(it);
   const hist = S.task_completion_history.filter(h => it.kind === 'task' ? h.taskId === t.id : h.recurringId === t.id).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
+  const ph = photoOf(it);
   const m = openModal(`<div class="hd"><h3>${esc(it.title)}</h3><button class="icon-btn" data-close aria-label="بستن">${ic('x')}</button></div>
+  ${ph ? `<div class="dph">${tagImg(ph)}<span class="phl">${esc(ph.label)}</span></div>` : ''}
   <div class="meta" style="font-size:13px"><span class="badge b-${st}">${ic(STATE_L[st][1])} ${STATE_L[st][0]}</span><span class="badge">${STATUS[it.status]}</span><span class="badge ${it.priority === 'urgent' ? 'b-urgent' : it.priority === 'high' ? 'b-high' : ''}">اولویت: ${PRI[it.priority]}</span>${it.category ? `<span class="badge">${esc(it.category)}</span>` : ''}</div>
   ${t.description ? `<p>${esc(t.description)}</p>` : ''}
   <div class="note" style="margin:10px 0">فضای کاری: <b>${esc(ws ? ws.name : '—')}</b>${pr ? ` · پروژه: <b>${esc(pr.title)}</b>` : ''}<br>
@@ -395,9 +459,22 @@ const barColor = p => p >= 70 ? 'var(--green)' : p >= 40 ? 'var(--orange)' : 'va
 const pctColor = p => p >= 70 ? 'var(--green-t)' : p >= 40 ? 'var(--orange-t)' : 'var(--accent)';
 function itemRow(it, opts = {}) {
   const st = itemState(it), ws = by('workspaces', it.wsId);
+  const ph = photoOf(it);
   return `<div class="item ${st}" data-key="${esc(it.key)}"><button class="chk" data-act="toggle" data-key="${esc(it.key)}" aria-label="${it.status === 'done' ? 'بازگرداندن' : 'تکمیل'} «${esc(it.title)}»"><span>${it.status === 'done' ? ic('check') : ''}</span></button>
-  <div class="main" data-act="details" data-key="${esc(it.key)}"><div class="t">${esc(it.title)}</div><div class="meta"><span class="badge b-${st}">${STATE_L[st][0]}</span>${it.priority === 'urgent' || it.priority === 'high' ? `<span class="badge b-${it.priority}">${PRI[it.priority]}</span>` : ''}${it.kind === 'occ' ? `<span title="تکراری">${ic('repeat')}</span>` : ''}${it.status === 'doing' ? '<span>در حال انجام</span>' : ''}${!opts.noWs && ws ? `<span>${esc(ws.name)}</span>` : ''}${it.date && !opts.noDate ? `<span>${J.fmt(it.date)}</span>` : ''}${it.reminder ? `<span>⏰ ${fa(it.reminder)}</span>` : ''}</div></div>
+  ${ph ? `<span class="thumb" data-act="details" data-key="${esc(it.key)}">${tagImg(ph)}</span>` : ''}<div class="main" data-act="details" data-key="${esc(it.key)}"><div class="t">${esc(it.title)}</div><div class="meta"><span class="badge b-${st}">${STATE_L[st][0]}</span>${it.priority === 'urgent' || it.priority === 'high' ? `<span class="badge b-${it.priority}">${PRI[it.priority]}</span>` : ''}${it.kind === 'occ' ? `<span title="تکراری">${ic('repeat')}</span>` : ''}${it.status === 'doing' ? '<span>در حال انجام</span>' : ''}${!opts.noWs && ws ? `<span>${esc(ws.name)}</span>` : ''}${it.date && !opts.noDate ? `<span>${J.fmt(it.date)}</span>` : ''}${it.reminder ? `<span>⏰ ${fa(it.reminder)}</span>` : ''}</div></div>
   <button class="icon-btn" data-act="del" data-key="${esc(it.key)}" aria-label="حذف «${esc(it.title)}»">${ic('trash')}</button></div>`;
+}
+const fmtMid = iso => { const j = J.isoToJ(iso); return fa(`${j.jd} ${J.MONTHS[j.jm - 1]} ${j.jy}`) + (iso === TODAY ? ' · امروز' : iso === J.addDays(TODAY, 1) ? ' · فردا' : ''); };
+/* big photo card (workspace page): text on the start side, ~40% photo on the end side */
+function taskCard(it) {
+  const st = itemState(it), t = it.task || it.rec, ph = photoOf(it), w = by('workspaces', it.wsId) || {}, desc = String(t.description || '').trim(), done = it.status === 'done';
+  return `<div class="item tcard ${st}" data-key="${esc(it.key)}">
+  <div class="main" data-act="details" data-key="${esc(it.key)}"><div class="due">${ic('cal')}<div><small>سررسید</small><b>${it.date ? fmtMid(it.date) : 'بدون تاریخ'}</b></div></div>
+  <div class="t">${esc(it.title)}</div>
+  <div class="pills"><span class="pill pr-${esc(it.priority)}">${ic(it.priority === 'low' ? 'check' : 'alert')} اولویت ${PRI[it.priority] || ''}</span>${st === 'over' ? '<span class="pill pr-over">عقب‌افتاده</span>' : ''}${done ? '<span class="pill pr-low">تکمیل‌شده</span>' : ''}${it.status === 'doing' ? '<span class="pill pr-rec">در حال انجام</span>' : ''}${it.kind === 'occ' ? `<span class="pill pr-rec" title="تکراری">${ic('repeat')}</span>` : ''}${it.reminder ? `<span class="pill pr-rec">⏰ ${fa(it.reminder)}</span>` : ''}</div>
+  ${desc ? `<p class="nt">${esc(desc.length > 90 ? desc.slice(0, 88) + '…' : desc)}</p>` : ''}</div>
+  <div class="ph" data-act="details" data-key="${esc(it.key)}" style="--wc:${esc(w.color || '#243F68')}">${ph ? `${tagImg(ph)}<span class="phl">${esc(ph.label)}</span>` : `<span class="phi">${ic(w.icon || 'folder')}</span>`}</div>
+  <div class="acts"><button class="chk" data-act="toggle" data-key="${esc(it.key)}" aria-label="${done ? 'بازگرداندن' : 'تکمیل'} «${esc(it.title)}»"><span>${done ? ic('check') : ''}</span></button><button class="icon-btn" data-act="del" data-key="${esc(it.key)}" aria-label="حذف «${esc(it.title)}»">${ic('trash')}</button></div></div>`;
 }
 function recRow(r) {
   const today = itemsOn(TODAY).find(i => i.kind === 'occ' && i.rec.id === r.id);
@@ -410,7 +487,7 @@ const sortItems = a => a.sort((x, y) => (x.status === 'done') - (y.status === 'd
 function wsCard(w) { const s = wsStats(w); return `<div class="card ws" data-act="openws" data-id="${w.id}" role="link" tabindex="0" aria-label="${esc(w.name)}">${wsAv(w)}<div class="body"><div class="row"><h3 class="sp">${esc(w.name)}</h3><span class="pct" style="color:${pctColor(s.p)}">${fa(s.p)}٪</span></div><div class="sub">${fa(s.open)} کار باز${s.today ? ` · ${fa(s.today)} برای امروز` : ''}${s.over ? ` · <span class="c-red">${fa(s.over)} عقب‌افتاده</span>` : ''}</div><div class="bar"><i style="width:${s.p}%;background:${barColor(s.p)}"></i></div></div></div>`; }
 /* ---------------- cloud account («ذخیره دائمی») ---------------- */
 const cloudUser = () => window.Sync && Sync.state.user;
-const SEED_IDS = new Set(['w_irandood', 'w_personal', 'w_family', 'w_sarafi', 'w_janebi', 'w_chapar', 'r_story', 'g_sales', 'p_campaign', 't_s1', 't_s2', 't_s3']);
+const SEED_IDS = new Set(['w_irandood', 'w_personal', 'w_family', 'w_sarafi', 'w_janebi', 'w_chapar', 'r_story', 'g_sales', 'p_campaign', 't_s1', 't_s2', 't_s3', 't_s4', 't_s5', 't_s6', 't_s7', 't_s8', 't_s9', 't_s10', 't_s11', 't_s12', 't_s13']);
 const fmtTime = ts => J.fmt(J.todayIso(new Date(ts)), true) + ' ساعت ' + fa(new Date(ts).toTimeString().slice(0, 5));
 function syncStatusHtml() {
   if (!window.Sync || !Sync.state.available) return '⚠️ بخش همگام‌سازی بارگذاری نشد؛ اطلاعات فقط روی همین دستگاه است.';
@@ -488,8 +565,9 @@ function vDashboard() {
 function vTasks(params) {
   if (params.scope) ui.scope = params.scope;
   const q = ui.q.trim().toLowerCase();
-  const matchItem = i => (!q || (i.title + ' ' + ((i.task || i.rec).description || '')).toLowerCase().includes(q)) && (!ui.fws || i.wsId === ui.fws) && (!ui.fpri || i.priority === ui.fpri) && (ui.fstatus === 'all' || (ui.fstatus === 'open' ? i.status !== 'done' : i.status === ui.fstatus));
-  const recMatch = r => wsVisible(r.workspaceId) && (!q || (r.title + ' ' + (r.description || '')).toLowerCase().includes(q)) && (!ui.fws || r.workspaceId === ui.fws) && (!ui.fpri || r.priority === ui.fpri);
+  const tl = x => { const p = photoOf(x); return p ? ' ' + p.label : ''; };
+  const matchItem = i => (!ui.ttag || photoIdOf(i) === ui.ttag) && (!q || (i.title + ' ' + ((i.task || i.rec).description || '') + tl(i)).toLowerCase().includes(q)) && (!ui.fws || i.wsId === ui.fws) && (!ui.fpri || i.priority === ui.fpri) && (ui.fstatus === 'all' || (ui.fstatus === 'open' ? i.status !== 'done' : i.status === ui.fstatus));
+  const recMatch = r => wsVisible(r.workspaceId) && (!ui.ttag || r.photo === ui.ttag) && (!q || (r.title + ' ' + (r.description || '') + tl(r)).toLowerCase().includes(q)) && (!ui.fws || r.workspaceId === ui.fws) && (!ui.fpri || r.priority === ui.fpri);
   let items, recs = []; const ws0 = weekStart(TODAY);
   if (ui.scope === 'today') items = itemsOn(TODAY); else if (ui.scope === 'week') items = itemsInRange(ws0, J.addDays(ws0, 6)); else if (ui.scope === 'overdue') items = overdueItems();
   else if (ui.scope === 'recurring') { items = []; recs = S.recurring_tasks.filter(recMatch); }
@@ -504,6 +582,7 @@ function vTasks(params) {
   <div class="toolbar"><input type="search" class="full" placeholder="جست‌وجو در کارها…" data-ui="q" value="${esc(ui.q)}" aria-label="جست‌وجو">
   ${sel('fws', 'فضای کاری', [['', 'همه فضاها'], ...S.workspaces.map(w => [w.id, w.name])], ui.fws)}${sel('fstatus', 'وضعیت', [['open', 'باز'], ['all', 'همه وضعیت‌ها'], ['todo', 'انجام‌نشده'], ['doing', 'در حال انجام'], ['done', 'تکمیل‌شده']], ui.fstatus)}
   ${sel('fpri', 'اولویت', [['', 'همه اولویت‌ها'], ...Object.entries(PRI)], ui.fpri)}${sel('sort', 'مرتب‌سازی', [['due', 'مرتب: تاریخ'], ['priority', 'مرتب: اولویت'], ['created', 'مرتب: جدیدترین'], ['title', 'مرتب: عنوان']], ui.sort)}</div>
+  ${(() => { const used = [...new Set([...S.tasks, ...S.recurring_tasks].filter(t => t.photo && wsVisible(t.workspaceId)).map(t => t.photo))].map(tagOf).filter(Boolean); return used.length ? `<div class="tagrow sm" role="group" aria-label="فیلتر با عکس">${used.map(t => tagChip(t, ui.ttag === t.id, 'ttag')).join('')}</div>` : ''; })()}
   <div style="margin-top:14px" data-list>${ui.scope !== 'recurring' ? list(items, { empty: 'کاری با این فیلترها پیدا نشد' }) : ''}</div>
   ${recs.length ? `<h2>کارهای تکراری</h2>${recs.map(recRow).join('')}` : (ui.scope === 'recurring' ? '<div class="empty">کار تکراری ندارید</div>' : '')}`;
 }
@@ -544,17 +623,30 @@ function vGoals() {
 }
 function vWorkspace(id) {
   const w = by('workspaces', id); if (!w) return `<div class="empty">این فضای کاری پیدا نشد (شاید حذف شده). <a href="#/">بازگشت</a></div>`;
-  const s = wsStats(w), today = sortItems(itemsOn(TODAY, id)), up = sortItems(itemsInRange(J.addDays(TODAY, 1), J.addDays(TODAY, 14), id)), over = overdueItems(id);
-  const nod = S.tasks.filter(t => t.workspaceId === id && !taskDate(t)).map(mkTaskItem), done = S.tasks.filter(t => t.workspaceId === id && t.status === 'done').length;
-  const recs = S.recurring_tasks.filter(r => r.workspaceId === id), gs = S.goals.filter(g => g.workspaceId === id), loose = S.projects.filter(p => p.workspaceId === id && !p.goalId);
+  if (ui.ftagWs !== id) { ui.ftag = ''; ui.ftagWs = id; }
+  const tag = tagOf(ui.ftag) ? ui.ftag : '', f = it => !tag || photoIdOf(it) === tag;
+  const s = wsStats(w), allOver = overdueItems(id), over = allOver.filter(f), today = sortItems(itemsOn(TODAY, id)).filter(f), up = sortItems(itemsInRange(J.addDays(TODAY, 1), J.addDays(TODAY, 14), id)).filter(f);
+  const nod = S.tasks.filter(t => t.workspaceId === id && !taskDate(t)).map(mkTaskItem).filter(f);
+  const lim = J.addDays(TODAY, 14), later = sortItems(S.tasks.filter(t => t.workspaceId === id && taskDate(t) && (t.status !== 'done' ? taskDate(t) > lim : !!tag && (taskDate(t) < TODAY || taskDate(t) > lim))).map(mkTaskItem).filter(f)).slice(0, 30);
+  const done = S.tasks.filter(t => t.workspaceId === id && t.status === 'done').length;
+  const recs = S.recurring_tasks.filter(r => r.workspaceId === id && (!tag || r.photo === tag)), gs = S.goals.filter(g => g.workspaceId === id), loose = S.projects.filter(p => p.workspaceId === id && !p.goalId);
   const since = new Date(Date.now() - 30 * 864e5).toISOString(), hist = S.task_completion_history.filter(h => h.workspaceId === id && h.action === 'complete' && h.at >= since).length;
-  return `<div class="row">${wsAv(w, 60)}<div class="sp"><h1 style="font-size:24px">${esc(w.name)}</h1><div class="sub">${esc(w.description || '')}${isPrivate(w) ? ' · 🔒 خصوصی' : ''}</div></div><button class="icon-btn" data-act="editws" data-id="${id}" aria-label="ویرایش فضای کاری">${ic('edit')}</button><button class="icon-btn" data-act="delws" data-id="${id}" aria-label="حذف فضای کاری">${ic('trash')}</button></div>
-  <div class="grid g3" style="margin-top:14px"><div class="card stat"><b class="c-green">${fa(s.today)}</b><span>باز امروز</span></div><div class="card stat"><b class="c-orange">${fa(s.open)}</b><span>کار باز</span></div><div class="card stat"><b class="c-red">${fa(over.length)}</b><span>عقب‌افتاده</span></div></div>
-  <div class="card" style="margin-top:10px"><b>گزارش پیشرفت</b><div class="bar"><i style="width:${s.p}%;background:${barColor(s.p)}"></i></div><div class="sub" style="margin-top:6px">${fa(s.p)}٪ پیشرفت (کارهای یک‌باره + نوبت‌های این هفته) · ${fa(done)} کار تکمیل‌شده · ${fa(hist)} انجام در ۳۰ روز اخیر · ایجاد: ${J.fmt(J.todayIso(new Date(w.createdAt)))}</div></div>
-  <div class="row wrap" style="margin-top:12px"><button class="btn pri" data-act="addtask" data-ws="${id}">${ic('plus')} کار</button><button class="btn" data-act="addtask" data-ws="${id}" data-rec="daily">${ic('repeat')} کار تکراری</button><button class="btn" data-act="addgoal" data-ws="${id}">${ic('target')} هدف</button><button class="btn" data-act="addproj" data-ws="${id}">${ic('folder')} پروژه</button></div>
-  ${over.length ? `<h2 class="c-red">عقب‌افتاده</h2>${list(over, { noWs: true })}` : ''}<h2>امروز</h2>${list(today, { noWs: true, noDate: true })}<h2>۱۴ روز آینده</h2>${list(up.slice(0, 30), { noWs: true })}
-  ${nod.length ? `<h2>بدون تاریخ</h2>${list(nod, { noWs: true })}` : ''}${recs.length ? `<h2>برنامه‌های تکرار</h2>${recs.map(recRow).join('')}` : ''}
-  <h2>اهداف و پروژه‌ها</h2>${gs.map(goalBlock).join('') || '<div class="empty">هدفی ثبت نشده</div>'}${loose.map(projRow).join('')}`;
+  const tags = tagsForWs(id), cnt = tg => S.tasks.filter(t => t.workspaceId === id && t.photo === tg && t.status !== 'done').length + S.recurring_tasks.filter(r => r.workspaceId === id && r.photo === tg).length;
+  const sub = w.description || (w.kind === 'family' ? 'مدیریت کارها و مناسبت‌های خانوادگی' : w.kind === 'personal' ? 'مدیریت کارهای شخصی و روزمره شما' : 'مدیریت کارهای ' + w.name);
+  const sec = (title, arr, cls = '') => arr.length ? `<h2 class="${cls}">${title} <span class="cnt">${fa(arr.length)}</span></h2><div class="tcards">${arr.map(taskCard).join('')}</div>` : '';
+  const tg = tagOf(tag), empty = !over.length && !today.length && !up.length && !nod.length && !later.length && !recs.length;
+  return `<section class="wshero" style="--wc:${esc(w.color || '#243F68')}"><div class="hbar"><a class="icon-btn hb" href="#/" aria-label="بازگشت به خانه">${ic('prev')}</a><span class="sp"></span><button class="icon-btn hb" data-act="editws" data-id="${id}" aria-label="ویرایش فضای کاری">${ic('edit')}</button><button class="icon-btn hb" data-act="delws" data-id="${id}" aria-label="حذف فضای کاری">${ic('trash')}</button></div>
+  <div class="hid">${wsAv(w, 64)}<div class="sp"><h1>${esc(w.name)}</h1><div class="hsub">🌿 ${esc(sub)}${isPrivate(w) ? ' · 🔒 خصوصی' : ''}</div></div></div>
+  <div class="hstats"><span><b>${fa(s.today)}</b>امروز</span><span><b>${fa(s.open)}</b>کار باز</span><span class="${allOver.length ? 'red' : ''}"><b>${fa(allOver.length)}</b>عقب‌افتاده</span><span><b>${fa(s.p)}٪</b>پیشرفت</span></div></section>
+  <button class="btn bignew" data-act="addtask" data-ws="${id}"${tag ? ` data-photo="${esc(tag)}"` : ''}>${ic('plus')} کار جدید${tg ? ` · ${esc(tg.label)}` : ''}</button>
+  ${tags.length ? `<div class="tagrow" role="group" aria-label="فیلتر کارها با عکس">${tags.map(t => tagChip(t, tag === t.id, 'wstag', cnt(t.id))).join('')}</div>` : ''}
+  ${tg ? `<div class="tagnote">${tagImg(tg)}<span class="sp">فقط کارهای «<b>${esc(tg.label)}</b>»</span><button class="btn sm" data-act="wstag" data-tag="${esc(tag)}">نمایش همه</button></div>` : ''}
+  <div class="row wrap minis"><button class="btn sm" data-act="addtask" data-ws="${id}" data-rec="daily">${ic('repeat')} کار تکراری</button><button class="btn sm" data-act="addgoal" data-ws="${id}">${ic('target')} هدف</button><button class="btn sm" data-act="addproj" data-ws="${id}">${ic('folder')} پروژه</button></div>
+  ${sec('عقب‌افتاده', over, 'c-red')}${sec('امروز', today)}${sec('۱۴ روز آینده', up.slice(0, 30))}${sec('بدون تاریخ', nod)}${sec(tag ? 'بعدتر و انجام‌شده‌ها' : 'بعدتر', later)}
+  ${empty ? `<div class="empty card">${tag ? `هنوز کاری با عکس «${esc(tg.label)}» ندارید.` : 'هنوز کاری در این فضا ثبت نشده.'}<br><button class="btn pri" style="margin-top:10px" data-act="addtask" data-ws="${id}"${tag ? ` data-photo="${esc(tag)}"` : ''}>${ic('plus')} افزودن اولین کار</button></div>` : ''}
+  ${recs.length ? `<h2>برنامه‌های تکرار</h2>${recs.map(recRow).join('')}` : ''}
+  ${tag ? '' : `<div class="card" style="margin-top:18px"><b>گزارش پیشرفت</b><div class="bar"><i style="width:${s.p}%;background:${barColor(s.p)}"></i></div><div class="sub" style="margin-top:6px">${fa(s.p)}٪ پیشرفت (کارهای یک‌باره + نوبت‌های این هفته) · ${fa(done)} کار تکمیل‌شده · ${fa(hist)} انجام در ۳۰ روز اخیر · ایجاد: ${J.fmt(J.todayIso(new Date(w.createdAt)))}</div></div>
+  <h2>اهداف و پروژه‌ها</h2>${gs.map(goalBlock).join('') || '<div class="empty">هدفی ثبت نشده</div>'}${loose.map(projRow).join('')}`}`;
 }
 function vLife() {
   const priv = S.workspaces.filter(isPrivate);
@@ -575,10 +667,11 @@ function vSettings() {
   ${meta.snapshotAt ? `<p class="note" style="margin-top:10px">قبل از آخرین بازیابی، یک کپی خودکار از اطلاعات قبلی گرفته شد (${J.fmt(J.todayIso(new Date(meta.snapshotAt)))}).<br><button class="btn sm" data-act="revert" style="margin-top:6px">بازگشت به اطلاعات قبل از بازیابی</button></p>` : ''}
   ${cloudUser() ? `<p class="sub">حساب ابری فعال است و اطلاعات خودکار روی سرور ذخیره می‌شود؛ پشتیبان فایل JSON فقط یک نسخه اضافه و اختیاری است.</p>` : `<p class="sub">اطلاعات فقط روی همین دستگاه و همین مرورگر ذخیره می‌شود و دائمی‌بودن آن ۱۰۰٪ تضمین‌شده نیست (پاک‌کردن داده‌های مرورگر یا محدودیت‌های iOS ممکن است آن را حذف کند). برای ذخیره دائمی وارد حساب شوید، یا به‌طور منظم پشتیبان بگیرید و فایل را در جای امن نگه دارید.</p>`}
   <p class="sub">وضعیت ذخیره‌سازی پایدار: ${meta.persisted === true ? '✓ مرورگر اجازه ذخیره پایدار داد' : meta.persisted === false ? 'مرورگر ذخیره پایدار را تأیید نکرد (معمول در iOS/Safari)' : 'نامشخص / پشتیبانی نمی‌شود'}</p></div>
+  <h2>عکس کارها</h2><div class="card"><p class="sub">برای هر کار یک عکس انتخاب کنید (عکس‌های آماده‌ی هر کسب‌وکار یا عکس گالری خودتان)؛ در صفحه هر فضا با زدن روی عکس، فقط کارهای همان عکس نمایش داده می‌شوند. عکس‌های خودتان فشرده می‌شوند و با حساب ابری همگام می‌شوند (${fa(S.media.length)} عکس).</p><button class="btn" data-act="addsamples">${ic('image')} افزودن کارهای نمونه با عکس</button></div>
   <h2>یادآوری‌ها</h2><div class="card"><p class="sub">یادآوری‌ها فقط وقتی برنامه باز است نمایش داده می‌شوند (هشدار درون‌برنامه‌ای و در صورت اجازه، اعلان مرورگر). اعلان زمان‌بندی‌شده هنگام بسته‌بودن برنامه، به‌ویژه روی آیفون، تضمین نمی‌شود و نیازمند سرور در نسخه آنلاین آینده است.</p>
   <button class="btn" data-act="notif">${ic('bell')} ${'Notification' in window ? (Notification.permission === 'granted' ? 'اعلان مرورگر فعال است' : 'اجازه اعلان مرورگر') : 'اعلان در این مرورگر پشتیبانی نمی‌شود'}</button></div>
   <h2>کاربران و دسترسی‌ها (آینده)</h2><div class="card"><p class="sub">نسخه فعلی تک‌کاربره است (شما: ${ROLES.owner}). ساختار داده برای نقش‌های ${Object.values(ROLES).join('، ')} و دسترسی هر کارمند به فضاهای مجاز آماده است؛ اعمال واقعی مجوزها در نسخه آنلاین و سمت سرور انجام خواهد شد.</p></div>
-  <h2>درباره</h2><div class="card sub">مدیریت من · نسخه ۱٫۱٫۰ · ساختار داده نسخه ${fa(DB.SCHEMA_VERSION)} · ${fa(S.workspaces.length)} فضای کاری، ${fa(S.tasks.length)} کار، ${fa(S.recurring_tasks.length)} کار تکراری</div>`;
+  <h2>درباره</h2><div class="card sub">مدیریت من · نسخه ۱٫۲٫۰ · ساختار داده نسخه ${fa(DB.SCHEMA_VERSION)} · ${fa(S.workspaces.length)} فضای کاری، ${fa(S.tasks.length)} کار، ${fa(S.recurring_tasks.length)} کار تکراری</div>`;
 }
 
 /* ---------------- render & routing ---------------- */
@@ -595,13 +688,14 @@ function render() {
   let v;
   try { v = path === '#/tasks' ? vTasks(params) : path === '#/calendar' ? vCalendar() : path === '#/goals' ? vGoals() : path === '#/life' ? vLife() : path === '#/settings' ? vSettings() : path.startsWith('#/ws/') ? vWorkspace(path.slice(5)) : vDashboard(); }
   catch (e) { console.error(e); v = `<div class="warn">خطا در نمایش صفحه: ${esc(e.message)}</div>`; }
-  const ae = document.activeElement, focus = ae && ae.dataset && ae.dataset.ui, sel = focus && ae.selectionStart;
+  const ae = document.activeElement, focus = ae && ae.dataset && ae.dataset.ui, sel = focus && ae.selectionStart, tr0 = path === lastPath && $('.tagrow'), trx = tr0 ? tr0.scrollLeft : 0;
   $('#app').innerHTML = `<nav class="side ${settings.sidebarMini ? 'mini' : ''}" aria-label="منوی اصلی"><div class="brand"><img src="icons/logo.svg" alt=""><span class="lbl">مدیریت من</span></div>
   ${NAV.map(([h, i, l]) => `<a href="${h}" class="${act(h) ? 'on' : ''}">${ic(i)}<span class="lbl">${l}</span></a>`).join('')}<a href="#/settings" class="${act('#/settings') ? 'on' : ''}">${ic('gear')}<span class="lbl">تنظیمات</span></a>
   <a href="#" class="collapse" data-act="mini">${ic('menu')}<span class="lbl">جمع‌کردن منو</span></a></nav>
   <main id="main">${v}</main><nav class="tabbar" aria-label="منوی پایین">${NAV.map(([h, i, l]) => `<a href="${h}" class="${act(h) ? 'on' : ''}">${ic(i)}<span>${l}</span></a>`).join('')}</nav>
   <button class="fab" data-act="addtask" aria-label="افزودن کار سریع">${ic('plus')}</button>`;
   if (focus) { const el = $(`[data-ui="${focus}"]`); if (el) { el.focus(); if (sel != null && el.setSelectionRange) try { el.setSelectionRange(sel, sel); } catch (x) { } } }
+  if (tr0) { const tr = $('.tagrow'); if (tr) tr.scrollLeft = trx; }
   if (path !== lastPath) { scrollTo(0, 0); lastPath = path; }
 }
 window.addEventListener('hashchange', render);
@@ -619,8 +713,11 @@ document.addEventListener('click', async e => {
     case 'del': { const it = findItem(d.key); if (it) await deleteItem(it); break; }
     case 'recdetails': { const r = by('recurring_tasks', d.id); if (r) { const nx = nextOccurrence(r) || TODAY; detailsModal(mkOccItem(r, nx, S.task_occurrences.find(o => o.id === occId(r.id, nx)))); } break; }
     case 'recdel': { const r = by('recurring_tasks', d.id); if (r) await deleteRecurring(r, nextOccurrence(r) || TODAY); break; }
-    case 'addtask': { const rp = route().path, ws = d.ws || (rp.startsWith('#/ws/') ? rp.slice(5) : null); const f = taskForm({ wsId: ws, date: d.date, recType: d.rec }); if (f && d.proj) f.projectId.value = d.proj; if (f && d.cat) f.category.value = d.cat; break; }
+    case 'addtask': { const rp = route().path, ws = d.ws || (rp.startsWith('#/ws/') ? rp.slice(5) : null); const f = taskForm({ wsId: ws, date: d.date, recType: d.rec, photo: d.photo }); if (f && d.proj) f.projectId.value = d.proj; if (f && d.cat) f.category.value = d.cat; break; }
     case 'openws': go('#/ws/' + d.id); break;
+    case 'wstag': ui.ftag = ui.ftag === d.tag ? '' : d.tag; render(); break;
+    case 'ttag': ui.ttag = ui.ttag === d.tag ? '' : d.tag; render(); break;
+    case 'addsamples': await addSamples(); break;
     case 'addws': wsForm(); break;
     case 'editws': wsForm(by('workspaces', d.id)); break;
     case 'delws': await deleteWorkspace(by('workspaces', d.id)); break;
@@ -670,7 +767,7 @@ function validateBackup(obj) {
   if (!Number.isInteger(obj.schemaVersion) || obj.schemaVersion < 1) return E('نسخه ساختار داده در فایل نامعتبر است.');
   if (obj.schemaVersion > DB.SCHEMA_VERSION) return E('این فایل با نسخه جدیدتر برنامه ساخته شده؛ ابتدا برنامه را به‌روزرسانی کنید.');
   if (!obj.data || typeof obj.data !== 'object') return E('بخش داده در فایل وجود ندارد.');
-  let data = {}; for (const s of DB.STORES) { if (!Array.isArray(obj.data[s])) return E(`بخش «${s}» در فایل وجود ندارد یا خراب است.`); data[s] = obj.data[s]; }
+  let data = {}; for (const s of DB.STORES) { if (s === 'media' && obj.data[s] === undefined) { data[s] = []; continue; } /* backups from v1.1 have no photos */ if (!Array.isArray(obj.data[s])) return E(`بخش «${s}» در فایل وجود ندارد یا خراب است.`); data[s] = obj.data[s]; }
   data = DB.migrate(JSON.parse(JSON.stringify(data)), obj.schemaVersion);
   const ids = {}; for (const s of DB.STORES) { ids[s] = new Set(); for (const r of data[s]) { if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !r.id) return E(`رکورد بدون شناسه در «${s}»`); if (ids[s].has(r.id)) return E(`شناسه تکراری در «${s}»: ${r.id}`); ids[s].add(r.id); } }
   const str = v => typeof v === 'string' && v.trim();
@@ -681,6 +778,7 @@ function validateBackup(obj) {
   for (const r of data.recurring_tasks) if (!str(r.title) || !ids.workspaces.has(r.workspaceId) || !r.rule || R.validate(r.rule)) return E('کار تکراری نامعتبر: ' + r.id);
   for (const o of data.task_occurrences) if (!ids.recurring_tasks.has(o.recurringId) || !/^\d{4}-\d{2}-\d{2}$/.test(o.date || '')) return E('نوبت کار تکراری با ارجاع نامعتبر: ' + o.id);
   for (const h of data.task_completion_history) if (!str(h.at)) return E('سابقه انجام نامعتبر');
+  for (const m of data.media) if (typeof m.dataUrl !== 'string' || !/^data:image\/(webp|jpeg|png);base64,/.test(m.dataUrl) || m.dataUrl.length > 400000) return E('عکس نامعتبر در فایل: ' + m.id);
   return { ok: true, data };
 }
 async function importBackup(file) {
@@ -726,16 +824,34 @@ function registerSW() {
 }
 
 /* ---------------- seed & boot ---------------- */
+/* sample tasks (stable ids) — each with a photo made for that business */
+function sampleTasks(at) {
+  const T = (id, w, title, due, pri, photo, desc, proj, cat) => ({ id, userId: OWNER, workspaceId: w, projectId: proj || null, title, description: desc || '', category: cat || null, startDate: null, dueDate: due, reminderTime: null, priority: pri, status: 'todo', subtasks: [], completedAt: null, assigneeId: null, photo: photo || null, createdAt: at, updatedAt: at });
+  const D = n => J.addDays(TODAY, n);
+  return [T('t_s1', 'w_irandood', 'طراحی بنر کمپین', D(1), 'urgent', 'dood-insta', 'استوری و پست کمپین پاییز برای اینستاگرام', 'p_campaign'), T('t_s2', 'w_irandood', 'هماهنگی با تأمین‌کننده', TODAY, 'medium', 'dood-stock', '', 'p_campaign'),
+    T('t_s3', 'w_family', 'خرید هفتگی خانه', D(2), 'medium', 'f-grocery', '', null, 'خرید خانه'),
+    T('t_s4', 'w_personal', 'تمدید بیمه موتور', D(5), 'high', 'p-moto', 'بیمه موتور رو به پایان است.'), T('t_s5', 'w_personal', 'معاینه فنی ماشین', D(12), 'medium', 'p-car', 'معاینه فنی خودرو رو تمدید کنید.'),
+    T('t_s6', 'w_personal', 'پرداخت اجاره خانه', D(20), 'low', 'p-home', 'اجاره ماه آینده رو پرداخت کنید.'),
+    T('t_s7', 'w_sarafi', 'تسویه حساب با مشتری', D(1), 'high', 'ex-settle', 'مانده حساب مشتری را نهایی و تسویه کنید.'), T('t_s8', 'w_sarafi', 'ارسال حواله یورو', TODAY, 'medium', 'ex-havale', 'حواله را ثبت و رسید را برای مشتری بفرستید.'),
+    T('t_s9', 'w_sarafi', 'خرید تتر برای موجودی', D(3), 'medium', 'ex-usdt', 'موجودی USDT کیف پول را شارژ کنید.'),
+    T('t_s10', 'w_chapar', 'بارگیری کارتن‌های مسکو', D(2), 'high', 'cg-truck', 'هماهنگی کامیون و لیست بار'), T('t_s11', 'w_janebi', 'سفارش قاب و شارژر از تأمین‌کننده', D(4), 'medium', 'acc-supplier', ''),
+    T('t_s12', 'w_irandood', 'ارسال سفارش‌های امروز', TODAY, 'high', 'dood-ship', 'بسته‌ها را به پیک تحویل دهید.'), T('t_s13', 'w_family', 'تدارک جشن تولد', D(9), 'low', 'f-birthday', 'کیک، بادکنک و دعوت مهمان‌ها')];
+}
+/* for installs seeded before v1.2: add the photo samples on request (never automatically into real data) */
+async function addSamples() {
+  const at = nowTs(), add = sampleTasks(at).filter(t => !by('tasks', t.id) && by('workspaces', t.workspaceId)).map(t => ({ ...t, projectId: t.projectId && by('projects', t.projectId) ? t.projectId : null }));
+  if (!add.length) { toast('همه کارهای نمونه از قبل وجود دارند'); return; }
+  await commit(add.map(t => ({ store: 'tasks', put: t }))); toast(`✓ ${fa(add.length)} کار نمونه با عکس اضافه شد`);
+}
 function seedOps() {
   const at = nowTs(), W = (id, name, description, icon, color, kind, order) => ({ id, userId: OWNER, name, description, icon, color, logo: null, kind, categories: CATS[kind] || [], order, memberIds: [OWNER], createdAt: at, updatedAt: at });
   const ws = [W('w_irandood', 'ایران دود — فروشگاه اینترنتی', 'فروشگاه اینترنتی', 'shop', '#243F68', 'business', 0), W('w_personal', 'امور شخصی', 'برنامه‌ها و کارهای شخصی', 'user', '#4A7BD0', 'personal', 1), W('w_family', 'خانواده', 'برنامه‌ها و مناسبت‌های خانوادگی', 'family', '#E66A70', 'family', 2), W('w_sarafi', 'صرافی', '', 'money', '#329C7A', 'business', 3), W('w_janebi', 'جانبی بازار', '', 'cart', '#F2A65A', 'business', 4), W('w_chapar', 'چاپار کارگو', 'حمل و ارسال بار', 'truck', '#8E6AC8', 'business', 5)];
   const ops = ws.map(w => ({ store: 'workspaces', put: w }));
-  ops.push({ store: 'recurring_tasks', put: { id: 'r_story', userId: OWNER, workspaceId: 'w_irandood', projectId: null, title: 'تولید استوری اینستاگرام ایران دود', description: 'نمونه کار تکراری — قابل ویرایش یا حذف', category: null, priority: 'high', reminderTime: null, subtasks: [], assigneeId: null, rule: { type: 'weekdays5', days: [0, 1, 2, 3, 4], interval: 1, startDate: TODAY, endDate: null }, createdAt: at, updatedAt: at } });
+  ops.push({ store: 'recurring_tasks', put: { id: 'r_story', userId: OWNER, workspaceId: 'w_irandood', projectId: null, title: 'تولید استوری اینستاگرام ایران دود', description: 'نمونه کار تکراری — قابل ویرایش یا حذف', category: null, photo: 'dood-insta', priority: 'high', reminderTime: null, subtasks: [], assigneeId: null, rule: { type: 'weekdays5', days: [0, 1, 2, 3, 4], interval: 1, startDate: TODAY, endDate: null }, createdAt: at, updatedAt: at } });
   ops.push({ store: 'goals', put: { id: 'g_sales', userId: OWNER, workspaceId: 'w_irandood', title: 'افزایش فروش آنلاین این ماه', description: 'نمونه هدف', period: 'monthly', targetDate: null, progressMethod: 'avg', manualProgress: 0, createdAt: at, updatedAt: at } });
   ops.push({ store: 'projects', put: { id: 'p_campaign', userId: OWNER, workspaceId: 'w_irandood', goalId: 'g_sales', title: 'کمپین تبلیغاتی پاییز', description: '', createdAt: at, updatedAt: at } });
-  const T = (id, w, title, due, pri, proj, cat) => ({ id, userId: OWNER, workspaceId: w, projectId: proj || null, title, description: '', category: cat || null, startDate: null, dueDate: due, reminderTime: null, priority: pri, status: 'todo', subtasks: [], completedAt: null, assigneeId: null, createdAt: at, updatedAt: at });
-  ops.push({ store: 'tasks', put: T('t_s1', 'w_irandood', 'طراحی بنر کمپین', J.addDays(TODAY, 1), 'urgent', 'p_campaign') }, { store: 'tasks', put: T('t_s2', 'w_irandood', 'هماهنگی با تأمین‌کننده', TODAY, 'medium', 'p_campaign') }, { store: 'tasks', put: T('t_s3', 'w_family', 'خرید هفتگی خانه', J.addDays(TODAY, 2), 'medium', null, 'خرید خانه') });
-  ops.push({ store: 'meta', put: { key: 'seeded', at } }, { store: 'meta', put: { key: 'schema', version: DB.SCHEMA_VERSION } }, { store: 'meta', put: { key: 'users', list: [{ id: OWNER, name: settings.userName, role: 'owner', workspaceIds: '*' }] } });
+  sampleTasks(at).forEach(t => ops.push({ store: 'tasks', put: t }));
+  ops.push({ store: 'meta', put: { key: 'photoseed', at } }, { store: 'meta', put: { key: 'seeded', at } }, { store: 'meta', put: { key: 'schema', version: DB.SCHEMA_VERSION } }, { store: 'meta', put: { key: 'users', list: [{ id: OWNER, name: settings.userName, role: 'owner', workspaceIds: '*' }] } });
   return ops;
 }
 async function boot() {
@@ -747,7 +863,12 @@ async function boot() {
   const sch = await DB.get('meta', 'schema');
   if (!(await DB.get('meta', 'seeded'))) await DB.batch(seedOps());
   else if (sch && sch.version < DB.SCHEMA_VERSION) { const d = DB.migrate(await DB.loadAll(), sch.version); await DB.replaceAll(d); await DB.batch([{ store: 'meta', put: { key: 'schema', version: DB.SCHEMA_VERSION } }]); }
-  await reloadState(); booted = true; render(); registerSW();
+  await reloadState();
+  if (!(await DB.get('meta', 'photoseed'))) {   /* v1.2: give the 3 original sample tasks their photos (only if still present & untagged) */
+    const P0 = { t_s1: 'dood-insta', t_s2: 'dood-stock', t_s3: 'f-grocery' }, ops = Object.entries(P0).map(([id, ph]) => by('tasks', id)).filter(t => t && !('photo' in t)).map(t => ({ store: 'tasks', put: { ...t, photo: P0[t.id] } }));
+    if (ops.length) await commit(ops, { silent: true }); await DB.batch([{ store: 'meta', put: { key: 'photoseed', at: nowTs() } }]);
+  }
+  booted = true; render(); registerSW();
   setInterval(tick, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (!stack.length) render(); checkReminders(); } });
   const mq = matchMedia('(prefers-color-scheme: dark)'); mq.addEventListener && mq.addEventListener('change', applyTheme);
