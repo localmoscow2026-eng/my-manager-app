@@ -1,14 +1,14 @@
 /* IndexedDB layer. DB structure version (IDB_VERSION) and data schema version (SCHEMA_VERSION)
    are separate. Upgrades only ADD stores; existing data is never cleared. */
 (function (root) {
-  const DB_NAME = 'my-manager-db', IDB_VERSION = 1, SCHEMA_VERSION = 1;
+  const DB_NAME = 'my-manager-db', IDB_VERSION = 2, SCHEMA_VERSION = 1;
   const STORES = ['workspaces', 'goals', 'projects', 'tasks', 'recurring_tasks', 'task_occurrences', 'task_completion_history'];
-  const ALL = [...STORES, 'meta', 'snapshots'];
+  const ALL = [...STORES, 'meta', 'snapshots', 'outbox']; /* outbox (v2): pending cloud-sync writes, keyPath 'key' = store|id */
   let db;
   function open() {
     return new Promise((res, rej) => {
       const rq = indexedDB.open(DB_NAME, IDB_VERSION);
-      rq.onupgradeneeded = () => { const d = rq.result; for (const s of ALL) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: s === 'meta' ? 'key' : 'id' }); };
+      rq.onupgradeneeded = () => { const d = rq.result; for (const s of ALL) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: s === 'meta' || s === 'outbox' ? 'key' : 'id' }); };
       rq.onsuccess = () => { db = rq.result; db.onversionchange = () => { db.close(); location.reload(); }; res(db); };
       rq.onerror = () => rej(rq.error); rq.onblocked = () => { root.onDbBlocked && root.onDbBlocked(); /* keep waiting: resolves when other tabs close */ };
     });

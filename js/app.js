@@ -56,7 +56,8 @@ const occId = (rid, date) => rid + '@' + date;
 /* ops: [{store, put}|{store, del}] → one IndexedDB transaction, then memory, then render */
 async function commit(ops, opts = {}) {
   const now = nowTs();
-  ops = ops.concat([{ store: 'meta', put: { key: 'lastChange', at: now } }]);
+  ops = ops.map(o => o.put && (o.store !== 'meta' || o.put.key === 'settings') ? { ...o, put: { ...o.put, updatedAt: now } } : o);   // every synced write carries a fresh client timestamp (last-write-wins)
+  ops = ops.concat([{ store: 'meta', put: { key: 'lastChange', at: now } }], window.Sync ? Sync.outboxOps(ops, now) : []);
   try { await DB.batch(ops); } catch (e) { console.error(e); toast('⚠️ ذخیره انجام نشد: ' + esc(e && e.message || e) + ' — اطلاعات قبلی دست‌نخورده باقی ماند.'); await reloadState(); render(); return false; }
   for (const o of ops) {
     if (o.store === 'meta') { if (o.put.key === 'settings') settings = o.put; else if (o.put.key === 'lastBackup') meta.lastBackup = o.put.at; else if (o.put.key === 'lastChange') meta.lastChange = o.put.at; continue; }
@@ -65,6 +66,7 @@ async function commit(ops, opts = {}) {
     if (o.del !== undefined) { if (i >= 0) arr.splice(i, 1); } else if (i >= 0) arr[i] = o.put; else arr.push(o.put);
   }
   if (!opts.silent) render();
+  if (window.Sync) Sync.kick();
   return true;
 }
 async function reloadState() {
@@ -73,6 +75,7 @@ async function reloadState() {
   const lb = await DB.get('meta', 'lastBackup'); meta.lastBackup = lb ? lb.at : null;
   const lc = await DB.get('meta', 'lastChange'); meta.lastChange = lc ? lc.at : null;
   const sn = await DB.get('snapshots', 'pre-restore'); meta.snapshotAt = sn ? sn.at : null;
+  const sd = await DB.get('meta', 'seeded'); meta.seededAt = sd ? sd.at : null;
 }
 
 /* ---------------- domain logic ---------------- */
@@ -405,7 +408,58 @@ function recRow(r) {
 const list = (items, opts) => items.length ? items.map(i => itemRow(i, opts)).join('') : `<div class="empty">${(opts && opts.empty) || 'موردی نیست'}</div>`;
 const sortItems = a => a.sort((x, y) => (x.status === 'done') - (y.status === 'done') || (x.date || '9').localeCompare(y.date || '9') || PRI_W[y.priority] - PRI_W[x.priority] || (x.reminder || '99').localeCompare(y.reminder || '99'));
 function wsCard(w) { const s = wsStats(w); return `<div class="card ws" data-act="openws" data-id="${w.id}" role="link" tabindex="0" aria-label="${esc(w.name)}">${wsAv(w)}<div class="body"><div class="row"><h3 class="sp">${esc(w.name)}</h3><span class="pct" style="color:${pctColor(s.p)}">${fa(s.p)}٪</span></div><div class="sub">${fa(s.open)} کار باز${s.today ? ` · ${fa(s.today)} برای امروز` : ''}${s.over ? ` · <span class="c-red">${fa(s.over)} عقب‌افتاده</span>` : ''}</div><div class="bar"><i style="width:${s.p}%;background:${barColor(s.p)}"></i></div></div></div>`; }
+/* ---------------- cloud account («ذخیره دائمی») ---------------- */
+const cloudUser = () => window.Sync && Sync.state.user;
+const SEED_IDS = new Set(['w_irandood', 'w_personal', 'w_family', 'w_sarafi', 'w_janebi', 'w_chapar', 'r_story', 'g_sales', 'p_campaign', 't_s1', 't_s2', 't_s3']);
+const fmtTime = ts => J.fmt(J.todayIso(new Date(ts)), true) + ' ساعت ' + fa(new Date(ts).toTimeString().slice(0, 5));
+function syncStatusHtml() {
+  if (!window.Sync || !Sync.state.available) return '⚠️ بخش همگام‌سازی بارگذاری نشد؛ اطلاعات فقط روی همین دستگاه است.';
+  const s = Sync.state, last = s.lastSync ? ` · آخرین همگام‌سازی: ${fmtTime(s.lastSync)}` : '', pend = s.pending ? ` (${fa(s.pending)} تغییر در صف ارسال)` : '';
+  if (!s.user) return 'وارد حساب نشده‌اید — اطلاعات فقط روی همین دستگاه ذخیره است.';
+  if (s.status === 'syncing') return `<span class="c-navy">⟳ در حال همگام‌سازی…</span>${last}`;
+  if (s.status === 'offline') return `<span class="c-orange">● آفلاین</span> — تغییرات روی دستگاه ذخیره شد و پس از اتصال خودکار ارسال می‌شود${pend}${last}`;
+  if (s.status === 'error') return `<span class="c-red">⚠️ همگام‌سازی انجام نشد</span> (خودکار دوباره تلاش می‌شود)${pend}${last}<br><span class="sub">${esc(s.error || '')}</span>`;
+  if (s.status === 'ok') return `<span class="c-green">✓ همگام شد</span>${last}`;
+  return last ? last.slice(3) : '';
+}
+function updateSyncUI() { const h = syncStatusHtml(); $$('[data-syncstatus]').forEach(el => { if (el.innerHTML !== h) el.innerHTML = h; }); }
+function cloudBanner() {
+  if (!window.Sync || !Sync.state.ready || !Sync.state.available || cloudUser()) return '';
+  const later = +localStorage.getItem('mm-cloud-later') || 0; if (Date.now() - later < 3 * 864e5) return '';
+  return `<div class="banner cloud" role="status" data-cloudbanner>☁️<span class="sp"><b>ذخیره دائمی:</b> با ورود به حساب، اطلاعاتت هیچ‌وقت پاک نمی‌شود و روی آیفون و کامپیوتر یکی است.</span><button class="btn sm pri" data-act="account">ورود / ثبت‌نام</button><button class="btn sm ghost" data-act="cloudlater">بعداً</button></div>`;
+}
+function cloudCard() {
+  const u = cloudUser();
+  if (!u) return `<div class="card"><p>با ساختن حساب (فقط ایمیل و رمز عبور)، همه اطلاعات به‌طور خودکار روی سرور امن ذخیره می‌شود: دیگر لازم نیست پشتیبان بگیرید و همان اطلاعات روی آیفون و کامپیوتر نمایش داده می‌شود. برنامه بدون اینترنت هم کار می‌کند و تغییرات بعداً ارسال می‌شود.</p>
+  <p class="sub" data-syncstatus>${syncStatusHtml()}</p><button class="btn pri" data-act="account">☁️ ورود / ثبت‌نام برای ذخیره دائمی</button></div>`;
+  return `<div class="card"><p>وارد شده با: <b dir="ltr">${esc(u.email || '')}</b></p><p data-syncstatus>${syncStatusHtml()}</p>
+  <div class="row wrap"><button class="btn pri" data-act="syncnow">⟳ همگام‌سازی الان</button><button class="btn" data-act="signout">خروج از حساب</button></div>
+  <p class="sub" style="margin-top:8px">برای داشتن همین اطلاعات روی دستگاه دیگر، آنجا هم با همین ایمیل و رمز وارد شوید. با خروج از حساب، اطلاعات روی این دستگاه باقی می‌ماند.</p></div>`;
+}
+function accountModal() {
+  const m = openModal(`<div class="hd"><h3>☁️ ورود / ثبت‌نام برای ذخیره دائمی</h3></div>
+  <p class="sub">اگر بار اول است، «ساخت حساب» را بزنید. روی دستگاه‌های دیگر با همین ایمیل و رمز «ورود» را بزنید.</p>
+  <form data-form="account" novalidate><label class="f"><span>ایمیل</span><input type="email" name="email" dir="ltr" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></label>
+  <label class="f"><span>رمز عبور (حداقل ۶ کاراکتر)</span><input type="password" name="password" dir="ltr" autocomplete="current-password" minlength="6" required></label>
+  <div class="warn" data-err hidden></div>
+  <div class="ft"><button class="btn pri" type="submit" data-mode="in">ورود</button><button class="btn" type="submit" data-mode="up">ساخت حساب</button><button class="btn ghost" type="button" data-c="no">انصراف</button></div></form>`);
+  m.querySelector('[data-c=no]').onclick = () => closeModal();
+  const f = m.querySelector('form');
+  f.addEventListener('submit', async e => {
+    e.preventDefault(); const mode = (e.submitter && e.submitter.dataset.mode) || 'in', err = f.querySelector('[data-err]'), email = f.email.value.trim(), pw = f.password.value;
+    const show = t => { err.textContent = t; err.hidden = !t; };
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return show('ایمیل را درست وارد کنید.');
+    if (pw.length < 6) return show('رمز عبور باید حداقل ۶ کاراکتر باشد.');
+    show(''); $$('button', f).forEach(b => b.disabled = true); const btn = e.submitter; const old = btn && btn.textContent; if (btn) btn.textContent = 'لطفاً صبر کنید…';
+    const r = mode === 'up' ? await Sync.signUp(email, pw) : await Sync.signIn(email, pw);
+    $$('button', f).forEach(b => b.disabled = false); if (btn) btn.textContent = old;
+    if (r.error) return show(r.error);
+    closeModal(); render(); toast(mode === 'up' ? '✓ حساب ساخته شد؛ اطلاعات شما از این به بعد دائمی ذخیره می‌شود' : '✓ وارد شدید؛ اطلاعات همگام شد');
+  });
+  setTimeout(() => f.email.focus(), 50);
+}
 function backupBanner() {
+  if (cloudUser()) return '';
   const lb = meta.lastBackup, old = !lb || (Date.now() - new Date(lb)) > 7 * 864e5, changed = meta.lastChange && (!lb || meta.lastChange > lb);
   if (!(old && changed)) return '';
   return `<div class="banner" role="status">${ic('alert')}<span class="sp">${lb ? `آخرین پشتیبان ${fa(Math.floor((Date.now() - new Date(lb)) / 864e5))} روز پیش بوده.` : 'هنوز نسخه پشتیبان نگرفته‌اید.'} برای جلوگیری از ازدست‌رفتن اطلاعات، پشتیبان بگیرید.</span><button class="btn sm pri" data-act="export">پشتیبان‌گیری</button></div>`;
@@ -420,7 +474,7 @@ function vDashboard() {
   const biz = S.workspaces.filter(w => !isPrivate(w)).sort((a, b) => (a.order || 0) - (b.order || 0)), priv = S.workspaces.filter(isPrivate);
   const goals = S.goals.filter(g => wsVisible(g.workspaceId) && (g.period === 'monthly' || g.period === 'weekly')).slice(0, 3);
   return `<div class="row"><div class="sp"><div class="sub">${J.fmt(TODAY, true)}</div><h1>${greet}، ${esc(settings.userName || '')} 👋</h1></div><a class="icon-btn" href="#/settings" aria-label="تنظیمات">${ic('gear')}</a></div>
-  <div style="margin-top:14px">${backupBanner()}${over.length ? `<div class="banner" style="border:1px solid var(--red)">${ic('alert')}<span class="sp">${fa(over.length)} کار عقب‌افتاده دارید.</span><a class="btn sm" href="#/tasks?scope=overdue">مشاهده</a></div>` : ''}${near.length ? `<div class="banner">${ic('bell')}<span class="sp">نزدیک موعد امروز: ${near.map(i => esc(i.title) + ' (' + fa(i.reminder) + ')').join('، ')}</span></div>` : ''}</div>
+  ${cloudUser() ? `<div class="sub syncline" data-syncstatus>${syncStatusHtml()}</div>` : ''}<div style="margin-top:14px">${cloudBanner()}${backupBanner()}${over.length ? `<div class="banner" style="border:1px solid var(--red)">${ic('alert')}<span class="sp">${fa(over.length)} کار عقب‌افتاده دارید.</span><a class="btn sm" href="#/tasks?scope=overdue">مشاهده</a></div>` : ''}${near.length ? `<div class="banner">${ic('bell')}<span class="sp">نزدیک موعد امروز: ${near.map(i => esc(i.title) + ' (' + fa(i.reminder) + ')').join('، ')}</span></div>` : ''}</div>
   <div class="grid g3" style="margin-top:6px">
    <div class="card stat" data-stat="today"><b class="c-green">${fa(today.length)}</b><span>کارهای امروز</span></div><div class="card stat" data-stat="week"><b class="c-orange">${fa(week.length)}</b><span>این هفته</span></div><div class="card stat" data-stat="over"><b class="c-red">${fa(over.length)}</b><span>عقب‌افتاده</span></div></div>
   <div class="card prog" style="margin-top:10px"><div class="row"><div class="ring" style="--p:${pct(dDone, today.length)}" data-l="${fa(pct(dDone, today.length))}٪"></div><div><b>پیشرفت امروز</b><div class="sub">${fa(dDone)} از ${fa(today.length)} انجام شد</div></div></div>
@@ -511,6 +565,7 @@ function vLife() {
 function vSettings() {
   const lb = meta.lastBackup;
   return `<h1>تنظیمات</h1>
+  <h2>حساب ابری و ذخیره دائمی</h2>${cloudCard()}
   <h2>ظاهر</h2><div class="card"><div class="seg">${[['auto', 'خودکار'], ['light', 'روشن'], ['dark', 'تاریک']].map(([k, l]) => `<button data-theme-set="${k}" class="${settings.theme === k ? 'on' : ''}">${l}</button>`).join('')}</div>
   <form data-form="name" class="row" style="margin-top:12px"><input type="text" name="n" value="${esc(settings.userName)}" aria-label="نام شما" placeholder="نام شما"><button class="btn">ذخیره نام</button></form>
   <label class="row" style="margin-top:12px;min-height:44px"><input type="checkbox" data-privacy ${settings.privacy ? 'checked' : ''} style="width:22px;height:22px"> حالت حریم خصوصی: امور شخصی و خانواده در فهرست کل کارها/تقویم نمایش داده نشوند</label></div>
@@ -518,12 +573,12 @@ function vSettings() {
   <p>آخرین پشتیبان: <b data-lastbackup>${lb ? J.fmt(J.todayIso(new Date(lb)), true) + ' ساعت ' + fa(new Date(lb).toTimeString().slice(0, 5)) : 'هنوز گرفته نشده'}</b></p>${backupBanner()}
   <div class="row wrap"><button class="btn pri" data-act="export">${ic('check')} دریافت فایل پشتیبان (JSON)</button><label class="btn">بازیابی از فایل<input type="file" accept=".json,application/json" hidden data-import></label></div>
   ${meta.snapshotAt ? `<p class="note" style="margin-top:10px">قبل از آخرین بازیابی، یک کپی خودکار از اطلاعات قبلی گرفته شد (${J.fmt(J.todayIso(new Date(meta.snapshotAt)))}).<br><button class="btn sm" data-act="revert" style="margin-top:6px">بازگشت به اطلاعات قبل از بازیابی</button></p>` : ''}
-  <p class="sub">اطلاعات فقط روی همین دستگاه و همین مرورگر ذخیره می‌شود و دائمی‌بودن آن ۱۰۰٪ تضمین‌شده نیست (پاک‌کردن داده‌های مرورگر یا محدودیت‌های iOS ممکن است آن را حذف کند). به‌طور منظم پشتیبان بگیرید و فایل را در جای امن (مثلاً iCloud Drive یا ایمیل) نگه دارید.</p>
+  ${cloudUser() ? `<p class="sub">حساب ابری فعال است و اطلاعات خودکار روی سرور ذخیره می‌شود؛ پشتیبان فایل JSON فقط یک نسخه اضافه و اختیاری است.</p>` : `<p class="sub">اطلاعات فقط روی همین دستگاه و همین مرورگر ذخیره می‌شود و دائمی‌بودن آن ۱۰۰٪ تضمین‌شده نیست (پاک‌کردن داده‌های مرورگر یا محدودیت‌های iOS ممکن است آن را حذف کند). برای ذخیره دائمی وارد حساب شوید، یا به‌طور منظم پشتیبان بگیرید و فایل را در جای امن نگه دارید.</p>`}
   <p class="sub">وضعیت ذخیره‌سازی پایدار: ${meta.persisted === true ? '✓ مرورگر اجازه ذخیره پایدار داد' : meta.persisted === false ? 'مرورگر ذخیره پایدار را تأیید نکرد (معمول در iOS/Safari)' : 'نامشخص / پشتیبانی نمی‌شود'}</p></div>
   <h2>یادآوری‌ها</h2><div class="card"><p class="sub">یادآوری‌ها فقط وقتی برنامه باز است نمایش داده می‌شوند (هشدار درون‌برنامه‌ای و در صورت اجازه، اعلان مرورگر). اعلان زمان‌بندی‌شده هنگام بسته‌بودن برنامه، به‌ویژه روی آیفون، تضمین نمی‌شود و نیازمند سرور در نسخه آنلاین آینده است.</p>
   <button class="btn" data-act="notif">${ic('bell')} ${'Notification' in window ? (Notification.permission === 'granted' ? 'اعلان مرورگر فعال است' : 'اجازه اعلان مرورگر') : 'اعلان در این مرورگر پشتیبانی نمی‌شود'}</button></div>
   <h2>کاربران و دسترسی‌ها (آینده)</h2><div class="card"><p class="sub">نسخه فعلی تک‌کاربره است (شما: ${ROLES.owner}). ساختار داده برای نقش‌های ${Object.values(ROLES).join('، ')} و دسترسی هر کارمند به فضاهای مجاز آماده است؛ اعمال واقعی مجوزها در نسخه آنلاین و سمت سرور انجام خواهد شد.</p></div>
-  <h2>درباره</h2><div class="card sub">مدیریت من · نسخه ۱٫۰٫۰ · ساختار داده نسخه ${fa(DB.SCHEMA_VERSION)} · ${fa(S.workspaces.length)} فضای کاری، ${fa(S.tasks.length)} کار، ${fa(S.recurring_tasks.length)} کار تکراری</div>`;
+  <h2>درباره</h2><div class="card sub">مدیریت من · نسخه ۱٫۱٫۰ · ساختار داده نسخه ${fa(DB.SCHEMA_VERSION)} · ${fa(S.workspaces.length)} فضای کاری، ${fa(S.tasks.length)} کار، ${fa(S.recurring_tasks.length)} کار تکراری</div>`;
 }
 
 /* ---------------- render & routing ---------------- */
@@ -579,6 +634,10 @@ document.addEventListener('click', async e => {
     case 'caltoday': ui.calDate = TODAY; render(); break;
     case 'calnav': { const n = +d.n, cur = ui.calDate || TODAY; if (ui.calMode === 'day') ui.calDate = J.addDays(cur, n); else if (ui.calMode === 'week') ui.calDate = J.addDays(cur, 7 * n); else { const j = J.isoToJ(cur); let m = j.jm + n, y = j.jy; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } ui.calDate = J.jToIso(y, m, Math.min(j.jd, J.monthLength(y, m))); } render(); break; }
     case 'export': await exportBackup(); break;
+    case 'account': accountModal(); break;
+    case 'cloudlater': localStorage.setItem('mm-cloud-later', Date.now()); render(); break;
+    case 'syncnow': if (!navigator.onLine) toast('اینترنت وصل نیست؛ تغییرات بعداً خودکار ارسال می‌شود'); await Sync.sync(true); break;
+    case 'signout': if (await confirmModal({ title: 'خروج از حساب', okText: 'خروج', msg: 'از حساب خارج می‌شوید. اطلاعات روی این دستگاه باقی می‌ماند ولی تغییرات بعدی تا ورود دوباره، فقط روی همین دستگاه ذخیره می‌شود.' })) { await Sync.signOut(); render(); toast('از حساب خارج شدید'); } break;
     case 'revert': await revertSnapshot(); break;
     case 'notif': if ('Notification' in window) { const p = await Notification.requestPermission(); toast(p === 'granted' ? 'اعلان فعال شد (فقط وقتی برنامه باز است)' : 'اجازه اعلان داده نشد'); render(); } break;
     case 'mini': commit([{ store: 'meta', put: { ...settings, sidebarMini: !settings.sidebarMini } }]); break;
@@ -630,13 +689,13 @@ async function importBackup(file) {
   const c = v.data; if (!await confirmModal({ title: 'بازیابی از فایل', okText: 'بازیابی', msg: `فایل معتبر است: ${fa(c.workspaces.length)} فضای کاری، ${fa(c.tasks.length)} کار، ${fa(c.recurring_tasks.length)} کار تکراری، ${fa(c.goals.length)} هدف.<div class="warn">اطلاعات فعلی با محتوای فایل جایگزین می‌شود. یک کپی خودکار از اطلاعات فعلی گرفته می‌شود تا در صورت نیاز برگردید.</div>` })) return;
   try {
     const at = nowTs(); await DB.batch([{ store: 'snapshots', put: { id: 'pre-restore', at, data: snapshotData() } }]);
-    await DB.replaceAll(c); await DB.batch([{ store: 'meta', put: { key: 'lastChange', at } }]); await reloadState(); render(); toast('✓ اطلاعات بازیابی شد');
+    const old = snapshotData(); await DB.replaceAll(c); await DB.batch([{ store: 'meta', put: { key: 'lastChange', at } }].concat(window.Sync ? Sync.replaceOps(old, c, at) : [])); await reloadState(); render(); toast('✓ اطلاعات بازیابی شد'); window.Sync && Sync.kick();
   } catch (x) { console.error(x); await reloadState(); render(); toast('⚠️ بازیابی ناموفق بود؛ اطلاعات قبلی حفظ شد.'); }
 }
 async function revertSnapshot() {
   const sn = await DB.get('snapshots', 'pre-restore'); if (!sn) return;
   if (!await confirmModal({ title: 'بازگشت به قبل از بازیابی', okText: 'بازگشت', msg: 'اطلاعات فعلی با کپی خودکارِ قبل از آخرین بازیابی جایگزین شود؟' })) return;
-  await DB.replaceAll(sn.data); await DB.batch([{ store: 'snapshots', del: 'pre-restore' }]); await reloadState(); render(); toast('✓ به اطلاعات قبل از بازیابی برگشتید');
+  const old = snapshotData(), at = nowTs(); await DB.replaceAll(sn.data); await DB.batch([{ store: 'snapshots', del: 'pre-restore' }].concat(window.Sync ? Sync.replaceOps(old, sn.data, at) : [])); await reloadState(); render(); toast('✓ به اطلاعات قبل از بازیابی برگشتید'); window.Sync && Sync.kick();
 }
 
 /* ---------------- reminders (only while app is open) ---------------- */
@@ -693,7 +752,13 @@ async function boot() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (!stack.length) render(); checkReminders(); } });
   const mq = matchMedia('(prefers-color-scheme: dark)'); mq.addEventListener && mq.addEventListener('change', applyTheme);
   setTimeout(checkReminders, 1500);
-  window.__mm = { S, validateBackup, itemsInRange, get settings() { return settings; } }; // exposed for automated tests only
+  window.__mm = { S, validateBackup, itemsInRange, reloadState, get settings() { return settings; } }; // exposed for automated tests only
+  if (window.Sync) Sync.init({
+    seed: () => ({ ids: SEED_IDS, at: meta.seededAt }),
+    onData: async () => { await reloadState(); render(); },
+    onAuth: () => { if (!stack.length || !$('[data-form=account]')) render(); },
+    onStatus: updateSyncUI
+  }).catch(e => console.warn('sync init', e));
 }
 boot();
 })();
